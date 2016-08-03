@@ -5,6 +5,14 @@ from sklearn.ensemble import RandomForestClassifier
 from statsmodels.discrete.discrete_model import Logit
 import pandas as pd
 
+def tag_counter(lst, tag_values):
+    tot = 0
+    for val in tag_values:
+        for descrip in lst:
+            if val in descrip:
+                tot += 1
+    return tot
+
 class CustomMixin(TransformerMixin):
     def get_params(self, **kwargs):
         return dict()
@@ -22,6 +30,16 @@ class FeatureEngineer(CustomMixin):
             code = line.split(':')[0]
             sentences = set(float(sentence.strip()) for sentence in line.split(':')[1].split(','))
             code_sentencing[code] = sentences
+
+    descrip_tags = {}
+    with open('data/Words_for_Dummies.txt') as f:
+        for line in f:
+            if 'skip' in line:
+                continue
+            key = line.split(':')[0]
+            values = line.split(':')[1].split(',')
+            values = [val.strip() for val in values]
+            descrip_tags[key] = values
 
     def fit(self, X, y):
         return self
@@ -49,18 +67,27 @@ class FeatureEngineer(CustomMixin):
                                                     for code in lst if code in self.code_sentencing]))
         X['Minimum Sentence'] = X['Possible Sentences'].apply(lambda x: min(x) if len(x) > 0 else 0.0)
         X['Maximum Sentence'] = X['Possible Sentences'].apply(lambda x: max(x) if len(x) > 0 else 0.0)
+
+        races = list(X['Ethnicity'].unique())
+        races.remove('OTHER')
+        X[races] = pd.get_dummies(X['Ethnicity'])[races]
+
+        for key, value in self.descrip_tags.iteritems():
+            X[key] = X['Description'].apply(lambda x: tag_counter(x, value))
         return X
 
 class ColumnFilter(CustomMixin):
-    columns = ['Weight', 'Number of Offenses', 'Priors', 'Height in Inches',
-               'BMI', 'Female', 'Transient', 'SVP', 'Age in Question',
-               'Minimum Sentence', 'Maximum Sentence']
+    exclude = [u'Description', u'Offense Code', u'Score', u'Score Date',
+               u'Tool Name', u'Year of Last Conviction', u'Year of Last Release',
+               u'redtext0', u'redtext1', u'redtext2', u'so_id', u'Date of Birth',
+               u'Ethnicity', u'Eye Color', u'Hair Color', u'Height', 'Age', 'Violation',
+               u'Last Known Address', u'Sex', 'Possible Sentences', 'Years in Violation']
 
     def fit(self, X, y):
         return self
 
     def transform(self, X):
-        X = X[self.columns]
+        X.drop(self.exclude, axis=1, inplace=True)
         return X
 
 
@@ -78,30 +105,30 @@ if __name__ == '__main__':
     model = p.fit(df, y)
     transform = model.transform(df)
 
-    scale = StandardScaler()
-    transform_scaled = pd.DataFrame()
-    transform_scaled[transform.columns] = pd.DataFrame(scale.fit_transform(transform))
-
-    lr = Logit(y, transform)
-    model_unscaled = lr.fit()
-    lr_scaled = Logit(y, transform_scaled)
-    model_scaled = lr_scaled.fit()
-
-    rf = RandomForestClassifier()
-    rf_low_depth = RandomForestClassifier(max_depth=3)
-    rf.fit(transform, y)
-    rf_low_depth.fit(transform, y)
-
-    def print_importance(rf, df):
-        importances = zip(df.columns, rf.feature_importances_)
-        for impor in sorted(importances, key=lambda x: x[1], reverse=True):
-            print impor
-
-    print '\nUnscaled: \n'
-    print model_unscaled.summary()
-    print '\nScaled: \n'
-    print model_scaled.summary()
-    print '\nImportances: \n'
-    print_importance(rf, transform)
-    print '\nLow Depth Importances: \n'
-    print_importance(rf_low_depth, transform)
+    # scale = StandardScaler()
+    # transform_scaled = pd.DataFrame()
+    # transform_scaled[transform.columns] = pd.DataFrame(scale.fit_transform(transform))
+    #
+    # lr = Logit(y, transform)
+    # model_unscaled = lr.fit()
+    # lr_scaled = Logit(y, transform_scaled)
+    # model_scaled = lr_scaled.fit()
+    #
+    # rf = RandomForestClassifier()
+    # rf_low_depth = RandomForestClassifier(max_depth=3)
+    # rf.fit(transform, y)
+    # rf_low_depth.fit(transform, y)
+    #
+    # def print_importance(rf, df):
+    #     importances = zip(df.columns, rf.feature_importances_)
+    #     for impor in sorted(importances, key=lambda x: x[1], reverse=True):
+    #         print impor
+    #
+    # print '\nUnscaled: \n'
+    # print model_unscaled.summary()
+    # print '\nScaled: \n'
+    # print model_scaled.summary()
+    # print '\nImportances: \n'
+    # print_importance(rf, transform)
+    # print '\nLow Depth Importances: \n'
+    # print_importance(rf_low_depth, transform)
