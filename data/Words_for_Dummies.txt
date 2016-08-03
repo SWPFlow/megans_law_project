@@ -1,0 +1,36 @@
+Crime: skip
+Rape: RAPE
+Assault: ASSAULT
+Battery: BATTERY
+Sodomy: SODOMY
+Child Porn: MATTER
+Penetration: PENETRATION
+Lewd Conduct: LEWD
+Oral Copulation: ORAL
+Annoy or Molest: MOLEST
+Sex Traffic: PANDERING, PANDERING, PROCUREMENT, TRAFFICKING
+Contact: CONTACT
+Touch Intimately: TOUCH
+Continuous Abuse: ABUSE
+skip
+Victim: skip
+Child: CHILD
+Under 10: UNDER 10
+Under 14: UNDER 14, OF 14, -14
+Under 16: UNDER 16, 14 OR 15, -16
+Under 18: UNDER 18, OVER 16, 16 OR 17
+Minor: MINOR
+Spouse: SPOUS
+Unconscious: UNCONSCIOUS
+Drugged: DRUGGED
+Incapable of Consent: GIVING CONSENT
+skip
+Conditions: skip
+Force: FORCE
+Attempt: ATTEMPT
+Caretaker: CARETAKER
+In Concert: CONCERT
+Threat: THREAT
+Intent: INTENT
+skip
+Non-California: NON-CALIFORNIA
