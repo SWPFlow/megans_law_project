@@ -45,12 +45,13 @@ class FeatureEngineer(CustomMixin):
         return self
 
     def transform(self, X):
+        # import ipdb; ipdb.set_trace()
         X.fillna('no info', inplace=True)
-        #v***vSomething very strange happened here >> My webscraper scraped these fields as lists, but I
-        #v***vhad to delimit them when I wrote to csv
-        X['Description'] = X['Description'].apply(lambda x: x.split(';') if type(x) == str else x)
-        X['Offense Code'] = X['Offense Code'].apply(lambda x: x.split(';') if type(x) == str else x)
-        #^***^For some reason, the strings were getting changed to lists before the .apply; hence the weird if statement
+        #v***vMy webscraper scraped these fields as lists, but I
+        #v***vhad to separate them with ';' them when I wrote to csv
+        X['Description'] = X['Description'].apply(lambda x: x.split(';'))
+        X['Offense Code'] = X['Offense Code'].apply(lambda x: x.split(';'))
+        #^***^
         X['Number of Offenses'] = X['Offense Code'].apply(lambda x: len(x))
         X['Priors'] = X['Description'].apply(lambda x: sum(1 if 'PRIOR' in y else 0 for y in x))
         X['Height in Inches'] = X['Height'].apply(lambda x: int(x.split("'")[0]) * 12 + int(x.split("'")[1].strip('"')))
@@ -77,18 +78,45 @@ class FeatureEngineer(CustomMixin):
         return X
 
 class ColumnFilter(CustomMixin):
-    exclude = [u'Description', u'Offense Code', u'Score', u'Score Date',
-               u'Tool Name', u'Year of Last Conviction', u'Year of Last Release',
-               u'redtext0', u'redtext1', u'redtext2', u'so_id', u'Date of Birth',
-               u'Ethnicity', u'Eye Color', u'Hair Color', u'Height', 'Age', 'Violation',
-               u'Last Known Address', u'Sex', 'Possible Sentences', 'Years in Violation']
+    exclude1 = [u'Description', u'Offense Code', u'Score', u'Score Date',
+                u'Tool Name', u'Year of Last Conviction', u'Year of Last Release',
+                u'redtext0', u'redtext1', u'redtext2', u'so_id', u'Date of Birth',
+                u'Ethnicity', u'Eye Color', u'Hair Color', u'Height', 'Age', 'Violation',
+                u'Last Known Address', u'Sex', 'Possible Sentences', 'Years in Violation']
+    exclude2 = ['Age in Question', u'BLACK', u'HISPANIC', u'FILIPINO', u'OTHER ASIAN',
+                u'CHINESE', u'PACIFIC ISLANDER', u'WHITE', u'UNKNOWN', u'GUAMANIAN',
+                u'KOREAN', u'VIETNAMESE', u'AMERICAN INDIAN', u'ASIAN INDIAN', u'SAMOAN',
+                u'HAWAIIAN', u'CAMBODIAN', u'JAPANESE', u'LAOTIAN', u'Height in Inches',
+                u'BMI', u'Female', 'Weight']
+
+    def __init__(self, prejudice=True):
+        self.prejudice = prejudice
+
+    def get_params(self, **kwargs):
+        return {'prejudice':self.prejudice}
 
     def fit(self, X, y):
         return self
 
     def transform(self, X):
-        X.drop(self.exclude, axis=1, inplace=True)
+        X.drop(self.exclude1, axis=1, inplace=True)
+        if not self.prejudice:
+            X.drop(self.exclude2, axis=1, inplace=True)
         return X
+
+# class Filter(CustomMixin):
+#     exclude = ['Age in Question', u'BLACK', u'HISPANIC',
+#        u'FILIPINO', u'OTHER ASIAN', u'CHINESE', u'PACIFIC ISLANDER', u'WHITE',
+#        u'UNKNOWN', u'GUAMANIAN', u'KOREAN', u'VIETNAMESE', u'AMERICAN INDIAN',
+#        u'ASIAN INDIAN', u'SAMOAN', u'HAWAIIAN', u'CAMBODIAN', u'JAPANESE',
+#        u'LAOTIAN', u'Height in Inches', u'BMI', u'Female', 'Weight']
+#
+#     def fit(self, X, y):
+#         return self
+#
+#     def transform(self, X):
+#         X.drop(self.exclude, axis=1, inplace=True)
+#         return X
 
 
 if __name__ == '__main__':
@@ -102,8 +130,15 @@ if __name__ == '__main__':
         ('columns', ColumnFilter())
     ])
 
-    model = p.fit(df, y)
-    transform = model.transform(df)
+    transform = p.fit_transform(df.copy(), y)
+    # model = p.fit(df, y)
+    # transform = model.transform(df)
+
+    p.set_params(columns__prejudice=False)
+
+    transform_behavior = p.fit_transform(df.copy(), y)
+    # model_behavior = p.fit(df, y)
+    # transform_behavior = model_behavior.transform(df)
 
     # scale = StandardScaler()
     # transform_scaled = pd.DataFrame()
