@@ -2,8 +2,13 @@ from sklearn.base import TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_validation import train_test_split
+from sklearn.grid_search import GridSearchCV
 from statsmodels.discrete.discrete_model import Logit
+from time import time
 import pandas as pd
+import numpy as np
 
 def tag_counter(lst, tag_values):
     tot = 0
@@ -21,7 +26,33 @@ class CustomMixin(TransformerMixin):
         for key in self.get_params():
             setattr(self, key, kwargs[key])
 
-class FeatureEngineer(CustomMixin):
+
+class ListSplitter(CustomMixin):
+    def fit(self, X, y):
+        return self
+
+    def transform(self, X):
+        X.fillna('no info', inplace=True)
+        #v***vMy webscraper scraped these fields as lists, but I
+        #v***vhad to separate them with ';' them when I wrote to csv
+        X['Description'] = X['Description'].apply(lambda x: x.split(';'))
+        X['Offense Code'] = X['Offense Code'].apply(lambda x: x.split(';'))
+        #^***^
+        return X
+
+
+class RaceDummies(CustomMixin):
+    def fit(self, X, y):
+        return self
+
+    def transform(self, X):
+        races = list(X['Ethnicity'].unique())
+        races.remove('OTHER')
+        X[races] = pd.get_dummies(X['Ethnicity'])[races]
+        return X
+
+
+class CrimeAndSentence(CustomMixin):
     code_sentencing = {}
     with open('data/code_sentencing.txt') as f:
         for line in f:
@@ -45,13 +76,22 @@ class FeatureEngineer(CustomMixin):
         return self
 
     def transform(self, X):
-        # import ipdb; ipdb.set_trace()
-        X.fillna('no info', inplace=True)
-        #v***vMy webscraper scraped these fields as lists, but I
-        #v***vhad to separate them with ';' them when I wrote to csv
-        X['Description'] = X['Description'].apply(lambda x: x.split(';'))
-        X['Offense Code'] = X['Offense Code'].apply(lambda x: x.split(';'))
-        #^***^
+        X['Possible Sentences'] = X['Offense Code'].apply(lambda lst: set.union(set(),
+                                                    *[self.code_sentencing[code]
+                                                    for code in lst if code in self.code_sentencing]))
+        X['Minimum Sentence'] = X['Possible Sentences'].apply(lambda x: min(x) if len(x) > 0 else 0.0)
+        X['Maximum Sentence'] = X['Possible Sentences'].apply(lambda x: max(x) if len(x) > 0 else 0.0)
+
+        for key, value in self.descrip_tags.iteritems():
+            X[key] = X['Description'].apply(lambda x: tag_counter(x, value))
+        return X
+
+
+class FeatureEngineer(CustomMixin):
+    def fit(self, X, y):
+        return self
+
+    def transform(self, X):
         X['Number of Offenses'] = X['Offense Code'].apply(lambda x: len(x))
         X['Priors'] = X['Description'].apply(lambda x: sum(1 if 'PRIOR' in y else 0 for y in x))
         X['Height in Inches'] = X['Height'].apply(lambda x: int(x.split("'")[0]) * 12 + int(x.split("'")[1].strip('"')))
@@ -63,19 +103,9 @@ class FeatureEngineer(CustomMixin):
                                                         .split('.')[0]) if 'VIOLATION' in x else 0)
         X['SVP'] = X['redtext1'].str.contains('VIOLENT') * 1
         X['Age in Question'] = X['Age'] - X['Years in Violation']
-        X['Possible Sentences'] = X['Offense Code'].apply(lambda lst: set.union(set(),
-                                                    *[self.code_sentencing[code]
-                                                    for code in lst if code in self.code_sentencing]))
-        X['Minimum Sentence'] = X['Possible Sentences'].apply(lambda x: min(x) if len(x) > 0 else 0.0)
-        X['Maximum Sentence'] = X['Possible Sentences'].apply(lambda x: max(x) if len(x) > 0 else 0.0)
-
-        races = list(X['Ethnicity'].unique())
-        races.remove('OTHER')
-        X[races] = pd.get_dummies(X['Ethnicity'])[races]
-
-        for key, value in self.descrip_tags.iteritems():
-            X[key] = X['Description'].apply(lambda x: tag_counter(x, value))
+        X['Constant'] = 1
         return X
+
 
 class ColumnFilter(CustomMixin):
     exclude1 = [u'Description', u'Offense Code', u'Score', u'Score Date',
@@ -104,19 +134,54 @@ class ColumnFilter(CustomMixin):
             X.drop(self.exclude2, axis=1, inplace=True)
         return X
 
-# class Filter(CustomMixin):
-#     exclude = ['Age in Question', u'BLACK', u'HISPANIC',
-#        u'FILIPINO', u'OTHER ASIAN', u'CHINESE', u'PACIFIC ISLANDER', u'WHITE',
-#        u'UNKNOWN', u'GUAMANIAN', u'KOREAN', u'VIETNAMESE', u'AMERICAN INDIAN',
-#        u'ASIAN INDIAN', u'SAMOAN', u'HAWAIIAN', u'CAMBODIAN', u'JAPANESE',
-#        u'LAOTIAN', u'Height in Inches', u'BMI', u'Female', 'Weight']
-#
-#     def fit(self, X, y):
-#         return self
-#
-#     def transform(self, X):
-#         X.drop(self.exclude, axis=1, inplace=True)
-#         return X
+class ScaleOrNo(CustomMixin):
+    def __init__(self, scale=True):
+        self.scale = scale
+        self.scaler = StandardScaler()
+
+    def fit(self, X, y):
+        if self.scale:
+            self.scaler.fit(X)
+        return self
+
+    def transform(self, X):
+        if self.scale:
+            self.scaler.transform(X)
+        return X
+
+
+def oversample(X, y):
+    columns = X.columns
+    name = y.name
+    X = X.values
+    y = y.values
+    if y.sum() * 1.0 / y.size > .5:
+        minority = 0
+        sample_add = y.sum() * 2 - y.size
+    else:
+        minority = 1
+        sample_add = y.size - y.sum() * 2
+
+    print 'Minority Class: ', minority
+    print 'Samples to Add: ', sample_add
+    minority_index = np.arange(y.size)[y == minority]
+    print 'Oversampling...'
+    start = time()
+    for i in xrange(sample_add):
+        index = np.random.choice(minority_index)
+        if i%1000 == 0 and i != 0:
+            print i, 'added.\nElapsed Time: ', time() - start, 'seconds'
+        X = np.append(X, X[index].reshape((1, len(columns))), axis=0)
+        y = np.append(y, minority)
+    X = pd.DataFrame(X)
+    X.columns = columns
+    y = pd.DataFrame(y)
+    y.name = name
+
+    return X, y
+
+
+
 
 
 if __name__ == '__main__':
@@ -124,19 +189,46 @@ if __name__ == '__main__':
     df['Violation'] = df['redtext1'].str.contains('VIOLATION') * 1
     y = df['Violation']
     y.fillna(0, inplace=True)
+    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
+    X_train_over, y_train_over = oversample(X_train, y_train)
 
     p = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
         ('feat_eng', FeatureEngineer()),
-        ('columns', ColumnFilter())
+        ('columns', ColumnFilter()),
+        ('scale', ScaleOrNo())
     ])
+    data_settings = {'prej': True,
+                     'noprej': False,
+                     'imba': (X_train, y_train),
+                     'bal': (X_train_over, y_train_over),
+                     'scale': True,
+                     'noscale': False}
+    training_sets = {}
+    test_sets = {}
+    for prejudice_setting in ['prej', 'noprej']:
+        p.set_params(columns__prejudice=data_settings[prejudice_setting])
+        for balance_setting in ['imba', 'bal']:
+            features, target = data_settings[balance_setting]
+            for scale_setting in ['scale', 'noscale']:
+                p.set_params(scale__scale=data_settings[scale_setting])
+                training_sets[(prejudice_setting,
+                           balance_setting,
+                           scale_setting)] = (p.fit_transform(features.copy(), target), target)
+                test_sets[(prejudice_setting,
+                           scale_setting)] = (p.fit_transform(X_test.copy(), y_test), y_test)
 
-    transform = p.fit_transform(df.copy(), y)
+    # gscv = GridSearchCV(p, param_grid, scoring='recall')
+
+    # transform = p.fit_transform(df.copy(), y)
     # model = p.fit(df, y)
     # transform = model.transform(df)
 
-    p.set_params(columns__prejudice=False)
-
-    transform_behavior = p.fit_transform(df.copy(), y)
+    # p.set_params(columns__prejudice=False)
+    #
+    # transform_behavior = p.fit_transform(df.copy(), y)
     # model_behavior = p.fit(df, y)
     # transform_behavior = model_behavior.transform(df)
 
