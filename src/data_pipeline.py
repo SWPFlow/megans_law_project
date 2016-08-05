@@ -1,14 +1,17 @@
 from sklearn.base import TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.svm import SVC
 from sklearn.cross_validation import train_test_split
 from sklearn.grid_search import GridSearchCV
 from statsmodels.discrete.discrete_model import Logit
 from time import time
 import pandas as pd
 import numpy as np
+import cPickle as pickle
 
 def tag_counter(lst, tag_values):
     tot = 0
@@ -219,6 +222,49 @@ if __name__ == '__main__':
                            scale_setting)] = (p.fit_transform(features.copy(), target), target)
                 test_sets[(prejudice_setting,
                            scale_setting)] = (p.fit_transform(X_test.copy(), y_test), y_test)
+
+    classifier_names = ['rfc', 'ada', 'gbc', 'svc', 'log', 'gnb']
+    classifiers = {'rfc': RandomForestClassifier,
+                   'ada': AdaBoostClassifier,
+                   'gbc': GradientBoostingClassifier,
+                   'svc': SVC,
+                   'log': LogisticRegression,
+                   'gnb': GaussianNB}
+    param_grids = {'rfc': {'n_estimators': [100, 250, 500],
+                           'max_features': ['auto', 5, 10],
+                           'max_depth': [None, 3, 5, 7]},
+                   'ada': {'n_estimators': [50, 100, 250],
+                           'learning_rate': [1, 0.1, 0.01]},
+                   'gbc': {'n_estimators': [100, 250, 500],
+                           'learning_rate': [1, 0.1, 0.01]},
+                   'svc': [{'kernel': ['linear'],
+                            'C': [10, 1, 0.1, 0.01]},
+                           {'kernel': ['rbf'],
+                           'C': [10, 1, 0.1, 0.01],
+                           'gamma': ['auto', 1.0, 0.1, 0.001]},
+                           {'kernel': ['poly'],
+                           'C': [10, 1, 0.1, 0.01],
+                           'degree': [3, 5, 7]}],
+                   'log': {'penalty': ['l1', 'l2'],
+                           'C': [1, 0.1, 0.01]},
+                   'gnb': {'class_prior_': [[0.8, 0.2], [0.9, 0.1], [0.5, 0.5]]}}
+
+    best_score = {'prej': 0, 'noprej': 0}
+    best_estimator, best_train_set, best_classifier = {}, {}, {}
+    for classifier in classifier_names:
+        print classifiers[classifier].__name__
+        for key, val in training_sets.iteritems():
+            print 'Training set: ', key
+            gs = GridSearchCV(classifiers[classifier](), param_grids[classifier], scoring='recall')
+            gs.fit(val[0], val[1])
+            if gs.best_score_ > best_score[key[0]]:
+                best_estimator[key[0]] = gs.best_estimator_
+                best_score[key[0]] = gs.best_score_
+                best_train_set[key[0]] = key
+                best_classifier[key[0]] = classifier
+
+    with open('results.pkl', 'w') as f:
+        pickle.dump((best_score, best_estimator, best_train_set, best_classifier), f)
 
     # gscv = GridSearchCV(p, param_grid, scoring='recall')
 
