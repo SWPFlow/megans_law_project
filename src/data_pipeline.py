@@ -7,6 +7,7 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
 from sklearn.cross_validation import train_test_split
 from sklearn.grid_search import GridSearchCV
+from sklearn.metrics import recall_score, precision_score, fbeta_score, accuracy_score
 from statsmodels.discrete.discrete_model import Logit
 from time import time
 import pandas as pd
@@ -183,26 +184,10 @@ def oversample(X, y):
 
     return X, y
 
-
-
-
-
-if __name__ == '__main__':
-    df = pd.read_csv('data/Megans_List.csv')
-    df['Violation'] = df['redtext1'].str.contains('VIOLATION') * 1
-    y = df['Violation']
-    y.fillna(0, inplace=True)
+def get_train_test_sets(p, df, y):
     X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
     X_train_over, y_train_over = oversample(X_train, y_train)
 
-    p = Pipeline([
-        ('lists', ListSplitter()),
-        ('race', RaceDummies()),
-        ('crime_sentence', CrimeAndSentence()),
-        ('feat_eng', FeatureEngineer()),
-        ('columns', ColumnFilter()),
-        ('scale', ScaleOrNo())
-    ])
     data_settings = {'prej': True,
                      'noprej': False,
                      'imba': (X_train, y_train),
@@ -213,87 +198,152 @@ if __name__ == '__main__':
     test_sets = {}
     for prejudice_setting in ['prej', 'noprej']:
         p.set_params(columns__prejudice=data_settings[prejudice_setting])
-        for balance_setting in ['imba', 'bal']:
-            features, target = data_settings[balance_setting]
-            for scale_setting in ['scale', 'noscale']:
-                p.set_params(scale__scale=data_settings[scale_setting])
-                training_sets[(prejudice_setting,
-                           balance_setting,
-                           scale_setting)] = (p.fit_transform(features.copy(), target), target)
-                test_sets[(prejudice_setting,
-                           scale_setting)] = (p.fit_transform(X_test.copy(), y_test), y_test)
+        for scale_setting in ['noscale']: # removed 'scale' from list
+            p.set_params(scale__scale=data_settings[scale_setting])
+            test_sets[prejudice_setting] = (p.fit_transform(X_test.copy(), y_test), y_test)
+            for balance_setting in ['bal']: #removed 'imba' from list
+                features, target = data_settings[balance_setting]
+                training_sets[prejudice_setting] = (p.fit_transform(features.copy(), target), target)
 
-    classifier_names = ['rfc', 'ada', 'gbc', 'log', 'gnb']
-    classifiers = {'rfc': RandomForestClassifier,
-                   'ada': AdaBoostClassifier,
-                   'gbc': GradientBoostingClassifier,
-                   'log': LogisticRegression,
-                   'gnb': GaussianNB}
-    param_grids = {'rfc': {'n_estimators': [100, 250, 500],
-                           'max_features': ['auto', 5, 10],
-                           'max_depth': [None, 3, 5, 7]},
-                   'ada': {'n_estimators': [50, 100, 250],
-                           'learning_rate': [1, 0.1, 0.01]},
-                   'gbc': {'n_estimators': [100, 250, 500],
-                           'learning_rate': [1, 0.1, 0.01]},
-                   'log': {'penalty': ['l1', 'l2'],
-                           'C': [1, 0.1, 0.01]}}
+    return training_sets, test_sets
 
-    best_score = {'prej': 0, 'noprej': 0}
-    best_estimator, best_train_set, best_classifier = {}, {}, {}
-    all_ests = []
-    for classifier in classifier_names:
-        print classifiers[classifier].__name__
-        for key, val in training_sets.iteritems():
-            print 'Training set: ', key
-            gs = GridSearchCV(classifiers[classifier](), param_grids[classifier], scoring='recall', verbose=1)
-            gs.fit(*val)
-            if gs.best_score_ > best_score[key[0]]:
-                best_estimator[key[0]] = gs.best_estimator_
-                best_score[key[0]] = gs.best_score_
-                best_train_set[key[0]] = key
-                best_classifier[key[0]] = classifier
-                all_ests.append(gs.best_estimator_)
 
-    with open('results.pkl', 'w') as f:
-        pickle.dump((best_score, best_estimator, best_train_set, best_classifier), f)
+def big_grid_search(training_sets, test_sets):
+        classifier_names = ['rfc', 'ada', 'gbc', 'log']
+        classifiers = {'rfc': RandomForestClassifier,
+                       'ada': AdaBoostClassifier,
+                       'gbc': GradientBoostingClassifier,
+                       'log': LogisticRegression}
+        param_grids = {'rfc': {'n_estimators': [100, 250, 500],
+                               'max_features': ['auto', 5, 10]},
+                       'ada': {'n_estimators': [100, 250, 500],
+                               'learning_rate': [1, 0.5, 0.1]},
+                       'gbc': {'n_estimators': [100, 250, 500],
+                               'learning_rate': [1, 0.1, 0.01]},
+                       'log': {'penalty': ['l1', 'l2'],
+                               'C': [1, 0.1, 0.01]}}
 
-    # gscv = GridSearchCV(p, param_grid, scoring='recall')
+        best_score = {'prej': 0, 'noprej': 0}
+        best_estimator = {}
+        all_ests = {}
+        for classifier in classifier_names:
+            print classifiers[classifier].__name__
+            for key, val in training_sets.iteritems():
+                print 'Training set: ', key
+                gs = GridSearchCV(classifiers[classifier](), param_grids[classifier], verbose=1, scoring=my_fbeta)
+                gs.fit(*val)
+                print "CV FBeta: ", gs.best_score_
+                all_ests[(key, classifier)] = gs.best_estimator_
+                preds = gs.best_estimator_.predict(test_sets[key][0])
+                y_true = test_sets[key][1]
+                print '\nRecall: ', recall_score(y_true, preds)
+                print 'Precision: ', precision_score(y_true, preds)
+                print 'Accuracy: ', accuracy_score(y_true, preds)
+                if classifier != 'log':
+                    feat_imp = zip(val[0].columns, gs.best_estimator_.feature_importances_)
+                    print 'Feature Importances:\n', sorted(feat_imp, key=lambda x: x[1], reverse=True)[:5]
 
-    # transform = p.fit_transform(df.copy(), y)
-    # model = p.fit(df, y)
-    # transform = model.transform(df)
+                if gs.best_score_ > best_score[key]:
+                    print "We've got a winner!"
+                    best_estimator[key] = gs.best_estimator_
+                    best_score[key] = gs.best_score_
 
-    # p.set_params(columns__prejudice=False)
+
+        return best_score, best_estimator, all_ests
+
+def oversample_train_test(df, y):
+    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
+    X_train_over, y_train_over = oversample(X_train, y_train)
+    return X_train_over, X_test, y_train_over, y_test
+
+def my_fbeta(estimator, X, y):
+    beta = 10
+    preds = estimator.predict(X)
+    return fbeta_score(y, preds, beta)
+
+
+
+if __name__ == '__main__':
+    df = pd.read_csv('data/Megans_List.csv')
+    df['Violation'] = df['redtext1'].str.contains('VIOLATION') * 1
+    y = df['Violation']
+    y.fillna(0, inplace=True)
+
+    feature_engineering = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('scale', ScaleOrNo())
+    ])
+
+
+
+    # Find out which training_sets and classifiers get the best recall.
+    training_sets, test_sets = get_train_test_sets(feature_engineering, df, y)
+    best_score, best_estimator, all_ests = big_grid_search(training_sets, test_sets)
+
+    print '\nPrejudice: \n'
+    prej_est = best_estimator['prej']
+    prej_y = test_sets['prej'][1]
+    prej_preds = prej_est.predict(test_sets['prej'][0])
+    print 'Recall: ', recall_score(prej_y, prej_preds)
+    print 'Precision: ', precision_score(prej_y, prej_preds)
+    print 'Accuracy: ', accuracy_score(prej_y, prej_preds)
+
+    print '\nNo Prejudice: \n'
+    prej_est = best_estimator['noprej']
+    prej_y = test_sets['noprej'][1]
+    prej_preds = prej_est.predict(test_sets['noprej'][0])
+    print 'Recall: ', recall_score(prej_y, prej_preds)
+    print 'Precision: ', precision_score(prej_y, prej_preds)
+    print 'Accuracy: ', accuracy_score(prej_y, prej_preds)
+
+    with open('models.pkl', 'w') as f:
+        pickle.dump(best_estimator, f)
+
+
+    ## More specific grid_search
+    # X_train, X_test, y_train, y_test = oversample_train_test(df, y)
     #
-    # transform_behavior = p.fit_transform(df.copy(), y)
-    # model_behavior = p.fit(df, y)
-    # transform_behavior = model_behavior.transform(df)
-
-    # scale = StandardScaler()
-    # transform_scaled = pd.DataFrame()
-    # transform_scaled[transform.columns] = pd.DataFrame(scale.fit_transform(transform))
+    # prej_model = Pipeline([
+    #     ('lists', ListSplitter()),
+    #     ('race', RaceDummies()),
+    #     ('crime_sentence', CrimeAndSentence()),
+    #     ('feat_eng', FeatureEngineer()),
+    #     ('columns', ColumnFilter()),
+    #     ('rf', RandomForestClassifier(n_jobs=-1))
+    # ])
     #
-    # lr = Logit(y, transform)
-    # model_unscaled = lr.fit()
-    # lr_scaled = Logit(y, transform_scaled)
-    # model_scaled = lr_scaled.fit()
+    # no_prej_model = Pipeline([
+    #     ('lists', ListSplitter()),
+    #     ('race', RaceDummies()),
+    #     ('crime_sentence', CrimeAndSentence()),
+    #     ('feat_eng', FeatureEngineer()),
+    #     ('columns', ColumnFilter(prejudice=False)),
+    #     ('ada', AdaBoostClassifier())
+    # ])
     #
-    # rf = RandomForestClassifier()
-    # rf_low_depth = RandomForestClassifier(max_depth=3)
-    # rf.fit(transform, y)
-    # rf_low_depth.fit(transform, y)
+    # print '\nPrejudice:\n'
+    # prej_grid = {'rf__criterion': ['gini', 'entropy'],
+    #              'rf__n_estimators': [200, 225, 250, 275, 300]}
     #
-    # def print_importance(rf, df):
-    #     importances = zip(df.columns, rf.feature_importances_)
-    #     for impor in sorted(importances, key=lambda x: x[1], reverse=True):
-    #         print impor
+    # gs_prej = GridSearchCV(prej_model, prej_grid, scoring='recall')
+    # gs_prej.fit(X_train.copy(), y_train)
+    # print gs_prej.best_params_
+    # prej_preds = gs_prej.best_estimator_.predict(X_test.copy())
+    # print 'Recall: ', recall_score(y_test, prej_preds)
+    # print 'Precision: ', precision_score(y_test, prej_preds)
     #
-    # print '\nUnscaled: \n'
-    # print model_unscaled.summary()
-    # print '\nScaled: \n'
-    # print model_scaled.summary()
-    # print '\nImportances: \n'
-    # print_importance(rf, transform)
-    # print '\nLow Depth Importances: \n'
-    # print_importance(rf_low_depth, transform)
+    # print '\nNo Prejudice:\n'
+    #
+    # no_prej_grid = {'ada__learning_rate': [0.05, 0.01, 0.005, 0.001],
+    #                 'ada__n_estimators': [25, 50, 75, 100]}
+    #
+    # gs_no_prej = GridSearchCV(no_prej_model, no_prej_grid, scoring='recall')
+    # gs_no_prej.fit(X_train.copy(), y_train)
+    # print gs_no_prej.best_params_
+    # no_prej_preds = gs_no_prej.best_estimator_.predict(X_test.copy())
+    # print 'Recall: ', recall_score(y_test, no_prej_preds)
+    # print 'Precision: ', precision_score(y_test, no_prej_preds)
