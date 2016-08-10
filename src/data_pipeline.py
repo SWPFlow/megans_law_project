@@ -1,13 +1,13 @@
 from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
 from sklearn.cross_validation import train_test_split
 from sklearn.grid_search import GridSearchCV
-from sklearn.metrics import recall_score, precision_score, fbeta_score, accuracy_score, precision_recall_curve
+from sklearn.metrics import recall_score, precision_score, fbeta_score, accuracy_score, precision_recall_curve, auc
 from statsmodels.discrete.discrete_model import Logit
 from time import time
 import pandas as pd
@@ -171,6 +171,33 @@ class PickEstimator(BaseEstimator):
     def predict_proba(self, X):
         return self.estimator.predict_proba(X)
 
+class EnsembleEstimator(BaseEstimator):
+    def fit(self, X, y):
+        self.rf = RandomForestClassifier(n_estimators=100)
+        self.rf.fit(X, y)
+        self.ada = AdaBoostClassifier(n_estimators=500)
+        self.ada.fit(X, y)
+        self.gbc = GradientBoostingClassifier(n_estimators=500)
+        self.gbc.fit(X, y)
+        self.log = LogisticRegression()
+        self.log.fit(X, y)
+        return self
+
+    def predict(self, X):
+        return self.predict_proba(X)[:,1] > .5
+
+    def predict_proba(self, X):
+        rf_proba = self.rf.predict_proba(X)
+        ada_proba = self.ada.predict_proba(X)
+        gbc_proba = self.gbc.predict_proba(X)
+        log_proba = self.log.predict_proba(X)
+        scale = MinMaxScaler()
+        rf_proba = scale.fit_transform(rf_proba)
+        ada_proba = scale.fit_transform(ada_proba)
+        gbc_proba = scale.fit_transform(gbc_proba)
+        log_proba = scale.fit_transform(log_proba)
+        proba = (rf_proba + ada_proba + gbc_proba + log_proba) / 4
+        return proba
 
 def oversample(X, y):
     if y.sum() * 1.0 / y.size > .5:
@@ -247,9 +274,9 @@ def big_grid_search(training_sets, test_sets):
             print '\n', classifiers[classifier].__name__
             for key, val in training_sets.iteritems():
                 print '\nTraining set: ', key
-                gs = GridSearchCV(classifiers[classifier](), param_grids[classifier], verbose=3, scoring=my_fbeta)
+                gs = GridSearchCV(classifiers[classifier](), param_grids[classifier], verbose=2, scoring=pr_auc)
                 gs.fit(*val)
-                print "\nCV FBeta: ", gs.best_score_
+                print "\nCV PR_AUC: ", gs.best_score_
                 all_ests[(key, classifier)] = gs.best_estimator_
                 preds = gs.best_estimator_.predict(test_sets[key][0])
                 y_true = test_sets[key][1]
@@ -303,7 +330,10 @@ def more_precise_grid(df, y):
             ('est', PickEstimator())
         ])
 
-        for esto in [LogisticRegression(), AdaBoostClassifier(), GradientBoostingClassifier()]:
+        for esto in [LogisticRegression(),
+                     AdaBoostClassifier(n_estimators=500),
+                     GradientBoostingClassifier(n_estimators=500),
+                     RandomForestClassifier(n_estimators=100)]:
             prej_model.set_params(est__estimator=esto)
             no_prej_model.set_params(est__estimator=esto)
 
@@ -351,7 +381,89 @@ def plot_pr_curve(probas, y_test, label):
     plt.plot(recall, precision, label=label)
 
 def pr_auc(estimator, X, y):
-    probas = estimator.predict_proba(X.copy())
+    probas = estimator.predict_proba(X.copy())[:,1]
+    precision, recall, thresholds = precision_recall_curve(y, probas)
+    return auc(recall, precision)
+
+
+def proba_df_maker(df, y):
+    X_train, X_test, y_train, y_test = oversample_train_test(df, y)
+
+    prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('est', PickEstimator())
+    ])
+
+    no_prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter(prejudice=False)),
+        ('est', PickEstimator())
+    ])
+
+    feature_engineering = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('scale', ScaleOrNo())
+    ])
+
+    new_df = feature_engineering(X_test.copy())
+    new_df['Violation'] = y_test.copy()
+    for esto in [LogisticRegression(),
+                 AdaBoostClassifier(n_estimators=500),
+                 GradientBoostingClassifier(n_estimators=500),
+                 RandomForestClassifier(n_estimators=100)]:
+        prej_model.set_params(est__estimator=esto)
+        no_prej_model.set_params(est__estimator=esto)
+
+        print '\nPrejudice:\n'
+        prej_model.fit(X_train.copy(), y_train)
+        prej_scores = prej_model.predict_proba(X_test.copy())[:,1]
+        new_df['Prej {}'.format(esto.__class__.__name__)] = prej_scores
+
+        print '\nNo Prejudice:\n'
+        no_prej_model.fit(X_train.copy(), y_train)
+        no_prej_scores = no_prej_model.predict_proba(X_test.copy())[:,1]
+        new_df['No Prej {}'.format(esto.__class__.__name__)] = no_prej_scores
+
+    return new_df
+
+
+def test_ensemble(df, y):
+    X_train, X_test, y_train, y_test = oversample_train_test(df, y)
+
+    no_prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter(prejudice=False)),
+        ('est', EnsembleEstimator())
+    ])
+
+    for esto in [EnsembleEstimator(),
+                 GradientBoostingClassifier(n_estimators=500)]:
+        no_prej_model.fit(X_train.copy(), y_train)
+        no_prej_preds = no_prej_model.predict(X_test.copy())
+        no_prej_scores = no_prej_model.predict_proba(X_test.copy())[:,1]
+        print 'Proba Range: {}-{}'.format(no_prej_scores.min(), no_prej_scores.max())
+        print 'Recall: ', recall_score(y_test, no_prej_preds)
+        print 'Precision: ', precision_score(y_test, no_prej_preds)
+        print 'Accuracy: ', accuracy_score(y_test, no_prej_preds)
+
+        plot_pr_curve(no_prej_scores, y_test, 'No Prej {}'.format(esto.__class__.__name__))
+    plt.legend(loc='best')
+    plt.show()
+
 
 
 
@@ -372,10 +484,16 @@ if __name__ == '__main__':
     ])
 
 
-    # Find out which training_sets and classifiers get the best fbeta.
+    # # Find out which training_sets and classifiers get the best fbeta.
     # training_sets, test_sets = get_train_test_sets(feature_engineering, df, y)
     # best_score, best_estimator, all_ests = big_grid_search(training_sets, test_sets)
 
 
-    # More specific grid_search
-    more_precise_grid(df, y)
+    # # More specific grid_search
+    # more_precise_grid(df, y)
+
+    # # Make a df with the probabilities
+    # proba_df = proba_df_maker(df, y)
+
+    # Test ensemble model
+    test_ensemble(df, y)
