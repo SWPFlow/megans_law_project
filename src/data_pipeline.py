@@ -1,196 +1,19 @@
-from sklearn.base import TransformerMixin, BaseEstimator
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import GaussianNB
-from sklearn.svm import SVC
 from sklearn.cross_validation import train_test_split
 from sklearn.grid_search import GridSearchCV
-from sklearn.metrics import recall_score, precision_score, fbeta_score, accuracy_score, precision_recall_curve, auc
+from sklearn.metrics import recall_score, precision_score, accuracy_score, precision_recall_curve, auc
 from sklearn.ensemble.partial_dependence import plot_partial_dependence
-from statsmodels.discrete.discrete_model import Logit
-from time import time
+from classes import tag_counter, RaceDummies, CrimeAndSentence, FeatureEngineer, ColumnFilter, PickEstimator
 import pandas as pd
 import numpy as np
 import cPickle as pickle
 import matplotlib.pyplot as plt
 pd.options.mode.chained_assignment = None
 
-def tag_counter(lst, tag_values):
-    tot = 0
-    for val in tag_values:
-        for descrip in lst:
-            if val in descrip:
-                tot += 1
-    return tot
 
-class CustomMixin(TransformerMixin):
-    def get_params(self, **kwargs):
-        return dict()
-
-    def set_params(self, **kwargs):
-        for key in self.get_params():
-            setattr(self, key, kwargs[key])
-
-
-class ListSplitter(CustomMixin):
-    def fit(self, X, y):
-        return self
-
-    def transform(self, X):
-        X.fillna('no info', inplace=True)
-        #v***vMy webscraper scraped these fields as lists, but I
-        #v***vhad to separate them with ';' them when I wrote to csv
-        X['Description'] = X['Description'].apply(lambda x: x.split(';'))
-        X['Offense Code'] = X['Offense Code'].apply(lambda x: x.split(';'))
-        #^***^
-        return X
-
-
-class RaceDummies(CustomMixin):
-    def fit(self, X, y):
-        return self
-
-    def transform(self, X):
-        races = list(X['Ethnicity'].unique())
-        races.remove('OTHER')
-        X[races] = pd.get_dummies(X['Ethnicity'])[races]
-        return X
-
-
-class CrimeAndSentence(CustomMixin):
-    code_sentencing = {}
-    with open('data/code_sentencing.txt') as f:
-        for line in f:
-            if 'skip' in line:
-                continue
-            code = line.split(':')[0]
-            sentences = set(float(sentence.strip()) for sentence in line.split(':')[1].split(','))
-            code_sentencing[code] = sentences
-
-    descrip_tags = {}
-    with open('data/Words_for_Dummies.txt') as f:
-        for line in f:
-            if 'skip' in line:
-                continue
-            key = line.split(':')[0]
-            values = line.split(':')[1].split(',')
-            values = [val.strip() for val in values]
-            descrip_tags[key] = values
-
-    def fit(self, X, y):
-        return self
-
-    def transform(self, X):
-        X['Possible Sentences'] = X['Offense Code'].apply(lambda lst: set.union(set(),
-                                                    *[self.code_sentencing[code]
-                                                    for code in lst if code in self.code_sentencing]))
-        X['Minimum Sentence'] = X['Possible Sentences'].apply(lambda x: min(x) if len(x) > 0 else 0.0)
-        X['Maximum Sentence'] = X['Possible Sentences'].apply(lambda x: max(x) if len(x) > 0 else 0.0)
-
-        for key, value in self.descrip_tags.iteritems():
-            X[key] = X['Description'].apply(lambda x: tag_counter(x, value))
-        return X
-
-
-class FeatureEngineer(CustomMixin):
-    def fit(self, X, y):
-        return self
-
-    def transform(self, X):
-        X['Number of Offenses'] = X['Offense Code'].apply(lambda x: len(x))
-        X['Priors'] = X['Description'].apply(lambda x: sum(1 if 'PRIOR' in y else 0 for y in x))
-        X['Height in Inches'] = X['Height'].apply(lambda x: int(x.split("'")[0]) * 12 + int(x.split("'")[1].strip('"')))
-        X['BMI'] = X['Weight'] * 0.45 / (X['Height in Inches'] * 0.025) ** 2
-        X['Female'] = pd.get_dummies(X['Sex'])['FEMALE']
-        X['Transient'] = X['redtext0'].str.contains('TRANSIENT') * 1
-        X['Age'] = 2016 - X['Date of Birth'].apply(lambda x: int(x.split('-')[-1]))
-        X['Years in Violation'] = X['redtext1'].apply(lambda x: 2016 - int(x.split('/')[-1]
-                                                        .split('.')[0]) if 'VIOLATION' in x else 0)
-        X['SVP'] = X['redtext1'].str.contains('VIOLENT') * 1
-        X['Age in Question'] = X['Age'] - X['Years in Violation']
-        X['Constant'] = 1
-        return X
-
-
-class ColumnFilter(CustomMixin):
-    exclude1 = [u'Description', u'Offense Code', u'Score', u'Score Date',
-                u'Tool Name', u'Year of Last Conviction', u'Year of Last Release',
-                u'redtext0', u'redtext1', u'redtext2', u'so_id', u'Date of Birth',
-                u'Ethnicity', u'Eye Color', u'Hair Color', u'Height', 'Age', 'Violation',
-                u'Last Known Address', u'Sex', 'Possible Sentences', 'Years in Violation']
-    exclude2 = ['Age in Question', u'BLACK', u'HISPANIC', u'FILIPINO', u'OTHER ASIAN',
-                u'CHINESE', u'PACIFIC ISLANDER', u'WHITE', u'UNKNOWN', u'GUAMANIAN',
-                u'KOREAN', u'VIETNAMESE', u'AMERICAN INDIAN', u'ASIAN INDIAN', u'SAMOAN',
-                u'HAWAIIAN', u'CAMBODIAN', u'JAPANESE', u'LAOTIAN', u'Height in Inches',
-                u'BMI', u'Female', 'Weight']
-
-    def __init__(self, prejudice=True):
-        self.prejudice = prejudice
-
-    def get_params(self, **kwargs):
-        return {'prejudice':self.prejudice}
-
-    def fit(self, X, y):
-        return self
-
-    def transform(self, X):
-        X.drop(self.exclude1, axis=1, inplace=True)
-        if not self.prejudice:
-            X.drop(self.exclude2, axis=1, inplace=True)
-        return X
-
-class ScaleOrNo(CustomMixin):
-    def __init__(self, scale=True):
-        self.scale = scale
-        self.scaler = StandardScaler()
-
-    def fit(self, X, y):
-        if self.scale:
-            self.scaler.fit(X)
-        return self
-
-    def transform(self, X):
-        if self.scale:
-            self.scaler.transform(X)
-        return X
-
-class PickEstimator(BaseEstimator):
-    def __init__(self, estimator=AdaBoostClassifier()):
-        self.estimator = estimator
-
-    def fit(self, X, y):
-        self.estimator.fit(X,y)
-        return self
-
-    def predict(self, X):
-        return self.estimator.predict(X)
-
-    def predict_proba(self, X):
-        return self.estimator.predict_proba(X)
-
-class EnsembleEstimator(BaseEstimator):
-    def __init__(self, weights=(.5, .5)):
-        self.weights = weights
-
-    def fit(self, X, y):
-        self.ada = AdaBoostClassifier(n_estimators=500)
-        self.ada.fit(X, y)
-        self.gbc = GradientBoostingClassifier(n_estimators=500)
-        self.gbc.fit(X, y)
-        return self
-
-    def predict(self, X):
-        return self.predict_proba(X)[:,1] > .5
-
-    def predict_proba(self, X):
-        w1, w2 = self.weights
-        ada_proba = self.ada.predict_proba(X)
-        gbc_proba = self.gbc.predict_proba(X)
-        proba = ada_proba * w1 + gbc_proba * w2
-        return proba
-
+# Works. Need this for no_prej model training/ below function
 def oversample(X, y):
     if y.sum() * 1.0 / y.size > .5:
         minority = 0
@@ -206,6 +29,11 @@ def oversample(X, y):
 
     return X, y
 
+# Works.  Need this for no_prej model training
+def oversample_train_test(df, y):
+    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
+    X_train_over, y_train_over = oversample(X_train, y_train)
+    return X_train_over, X_test, y_train_over, y_test
 
 def get_train_test_sets(p, df, y):
     X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
@@ -214,19 +42,15 @@ def get_train_test_sets(p, df, y):
     data_settings = {'prej': True,
                      'noprej': False,
                      'imba': (X_train, y_train),
-                     'bal': (X_train_over, y_train_over),
-                     'scale': True,
-                     'noscale': False}
+                     'bal': (X_train_over, y_train_over)}
     training_sets = {}
     test_sets = {}
     for prejudice_setting in ['prej', 'noprej']:
         p.set_params(columns__prejudice=data_settings[prejudice_setting])
-        for scale_setting in ['noscale']: # removed 'scale' from list
-            p.set_params(scale__scale=data_settings[scale_setting])
-            test_sets[prejudice_setting] = (p.fit_transform(X_test.copy(), y_test), y_test)
-            for balance_setting in ['bal']: #removed 'imba' from list
-                features, target = data_settings[balance_setting]
-                training_sets[prejudice_setting] = (p.fit_transform(features.copy(), target), target)
+        test_sets[prejudice_setting] = (p.fit_transform(X_test.copy(), y_test), y_test)
+        for balance_setting in ['bal']: #removed 'imba' from list
+            features, target = data_settings[balance_setting]
+            training_sets[prejudice_setting] = (p.fit_transform(features.copy(), target), target)
 
     return training_sets, test_sets
 
@@ -274,19 +98,7 @@ def big_grid_search(training_sets, test_sets):
 
         return best_score, best_estimator, all_ests
 
-def oversample_train_test(df, y):
-    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
-    X_train_over, y_train_over = oversample(X_train, y_train)
-    return X_train_over, X_test, y_train_over, y_test
 
-def my_fbeta(estimator, X, y):
-    beta = .5
-    preds = estimator.predict(X)
-    return fbeta_score(y, preds, beta)
-
-def change_beta(new_beta):
-    global beta
-    beta = new_beta
 
 def more_precise_grid(df, y):
         X_train, X_test, y_train, y_test = oversample_train_test(df, y)
@@ -357,16 +169,18 @@ def more_precise_grid(df, y):
         plt.legend(loc='best')
         plt.show()
 
+# Works.  Add documentation or reformat, because I can never remember how it works.
 def plot_pr_curve(probas, y_test, label):
     precision, recall, thresholds = precision_recall_curve(y_test, probas)
     plt.plot(recall, precision, label=label)
 
+# Important Scoring function!
 def pr_auc(estimator, X, y):
     probas = estimator.predict_proba(X.copy())[:,1]
     precision, recall, thresholds = precision_recall_curve(y, probas)
     return auc(recall, precision)
 
-
+# Maybed delete this one
 def proba_df_maker(df, y):
     X_train, X_test, y_train, y_test = oversample_train_test(df, y)
 
@@ -421,36 +235,7 @@ def proba_df_maker(df, y):
 
     return new_df
 
-
-def gs_ensemble(df, y):
-    # X_train, X_test, y_train, y_test = oversample_train_test(df, y)
-    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
-
-    prej_model = Pipeline([
-        ('lists', ListSplitter()),
-        ('race', RaceDummies()),
-        ('crime_sentence', CrimeAndSentence()),
-        ('feat_eng', FeatureEngineer()),
-        ('columns', ColumnFilter()),
-        ('est', EnsembleEstimator())
-    ])
-
-    param_grid = {'est__weights': [(1, 0),
-                                   (.5, .5),
-                                   (.6, .4),
-                                   (.7, .3)]}
-    gs = GridSearchCV(prej_model, param_grid, scoring=pr_auc, verbose=2)
-    gs.fit(X_train.copy(), y_train)
-    print 'PRAUC', pr_auc(gs.best_estimator_, X_test, y_test)
-    return gs
-    # no_prej_model.fit(X_train.copy(), y_train)
-    # no_prej_preds = no_prej_model.predict(X_test.copy())
-    # no_prej_scores = no_prej_model.predict_proba(X_test.copy())[:,1]
-    # print 'Proba Range: {}-{}'.format(no_prej_scores.min(), no_prej_scores.max())
-    # print 'Recall: ', recall_score(y_test, no_prej_preds)
-    # print 'Precision: ', precision_score(y_test, no_prej_preds)
-    # print 'Accuracy: ', accuracy_score(y_test, no_prej_preds)
-
+# Works fine but trivial
 def feat_imp(cols, est):
     imps = zip(cols, est.feature_importances_)
     return sorted(imps, key=lambda x: x[1], reverse=True)[:10]
@@ -477,8 +262,68 @@ def partial_dependence(df, y):
     fig, axs = plot_partial_dependence(gbc, X, feats, feature_names=names,
                                        n_jobs=3, grid_resolution=50)
 
+def pickle_no_prej(df, y):
+    X_train, X_test, y_train, y_test = oversample_train_test(df, y)
 
+    no_prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('gbc', GradientBoostingClassifier())
+    ])
 
+    param_grid = {'gbc__n_estimators': [775, 800, 850],
+                  'gbc__learning_rate': [1, .75, .5]}
+    gs = GridSearchCV(no_prej_model, param_grid, scoring=pr_auc, verbose=3)
+    gs.fit(X_train.copy(), y_train)
+    print gs.best_estimator_
+    print gs.best_score_
+    return gs
+
+def pickle_prej(df, y):
+    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
+
+    prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('ada', AdaBoostClassifier())
+    ])
+
+    param_grid = {'ada__n_estimators': [400, 450, 500],
+                  'ada__learning_rate': [.75, 0.5, .25]}
+    gs = GridSearchCV(prej_model, param_grid, scoring=pr_auc, verbose=3)
+    gs.fit(X_train.copy(), y_train)
+    print gs.best_estimator_
+    print gs.best_score_
+    with open('prej_ada.pkl', 'w') as f:
+        pickle.dump(gs.best_estimator_, f)
+
+def pickle_gbc_prej(df, y):
+    X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
+
+    prej_model = Pipeline([
+        ('lists', ListSplitter()),
+        ('race', RaceDummies()),
+        ('crime_sentence', CrimeAndSentence()),
+        ('feat_eng', FeatureEngineer()),
+        ('columns', ColumnFilter()),
+        ('gbc', AdaBoostClassifier())
+    ])
+
+    param_grid = {'gbc__n_estimators': [450, 500, 550],
+                  'gbc__learning_rate': [.75, 0.5, .25]}
+    gs = GridSearchCV(prej_model, param_grid, scoring=pr_auc, verbose=3)
+    gs.fit(X_train.copy(), y_train)
+    print gs.best_estimator_
+    print gs.best_score_
+    return gs
+    # with open('prej_gbc.pkl', 'w') as f:
+    #     pickle.dump(gs.best_estimator_, f)
 
 
 
@@ -493,8 +338,7 @@ if __name__ == '__main__':
         ('race', RaceDummies()),
         ('crime_sentence', CrimeAndSentence()),
         ('feat_eng', FeatureEngineer()),
-        ('columns', ColumnFilter()),
-        ('scale', ScaleOrNo())
+        ('columns', ColumnFilter())
     ])
 
 
@@ -512,5 +356,11 @@ if __name__ == '__main__':
     # # Test ensemble model
     # gs = gs_ensemble(df, y)
 
-    # Plot partial dependence
-    partial_dependence(df, y)
+    # # Plot partial dependence
+    # partial_dependence(df, y)
+
+    # Grid search the no_prej model and pickle it
+    gs = pickle_no_prej(df, y)
+
+    # # Grid search the prej model and pickle it
+    # gs = pickle_gbc_prej(df, y)
