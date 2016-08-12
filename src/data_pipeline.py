@@ -5,7 +5,7 @@ from sklearn.cross_validation import train_test_split
 from sklearn.grid_search import GridSearchCV
 from sklearn.metrics import recall_score, precision_score, accuracy_score, precision_recall_curve, auc
 from sklearn.ensemble.partial_dependence import plot_partial_dependence
-from classes import tag_counter, RaceDummies, CrimeAndSentence, FeatureEngineer, ColumnFilter, PickEstimator
+from classes import tag_counter, ListSplitter, RaceDummies, CrimeAndSentence, FeatureEngineer, ColumnFilter, PickEstimator
 import pandas as pd
 import numpy as np
 import cPickle as pickle
@@ -242,24 +242,26 @@ def feat_imp(cols, est):
 
 def partial_dependence(df, y):
     X_train, X_test, y_train, y_test = oversample_train_test(df, y)
+    # X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)
 
     feature_engineering = Pipeline([
         ('lists', ListSplitter()),
         ('race', RaceDummies()),
         ('crime_sentence', CrimeAndSentence()),
         ('feat_eng', FeatureEngineer()),
-        ('columns', ColumnFilter())
+        ('columns', ColumnFilter(prejudice=False))
     ])
 
     X = feature_engineering.fit_transform(X_train.copy(), y_train)
+    X_test = feature_engineering.fit_transform(X_test.copy(), y_test)
 
-    gbc = GradientBoostingClassifier(n_estimators=500)
+    gbc = GradientBoostingClassifier(n_estimators=850, learning_rate=.75)
     gbc.fit(X.copy(), y_train)
     most_imp = np.argsort(gbc.feature_importances_)[-6:]
 
-    names = list(X.columns)
+    names = list(X_test.columns)
     feats = list(most_imp)
-    fig, axs = plot_partial_dependence(gbc, X, feats, feature_names=names,
+    fig, axs = plot_partial_dependence(gbc, X_test, feats, feature_names=names,
                                        n_jobs=3, grid_resolution=50)
 
 def pickle_no_prej(df, y):
@@ -315,7 +317,7 @@ def pickle_gbc_prej(df, y):
         ('gbc', AdaBoostClassifier())
     ])
 
-    param_grid = {'gbc__n_estimators': [450, 500, 550],
+    param_grid = {'gbc__n_estimators': [425, 450, 475],
                   'gbc__learning_rate': [.75, 0.5, .25]}
     gs = GridSearchCV(prej_model, param_grid, scoring=pr_auc, verbose=3)
     gs.fit(X_train.copy(), y_train)
@@ -356,11 +358,11 @@ if __name__ == '__main__':
     # # Test ensemble model
     # gs = gs_ensemble(df, y)
 
-    # # Plot partial dependence
-    # partial_dependence(df, y)
+    # Plot partial dependence
+    partial_dependence(df, y)
 
-    # Grid search the no_prej model and pickle it
-    gs = pickle_no_prej(df, y)
+    # # Grid search the no_prej model and pickle it
+    # gs = pickle_no_prej(df, y)
 
     # # Grid search the prej model and pickle it
     # gs = pickle_gbc_prej(df, y)
