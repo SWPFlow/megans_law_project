@@ -27,7 +27,7 @@ I first considered recall as a scoring metric for my models because I wanted to 
 
 I set out to create a tool that the parole and probation systems could use to decide where they should focus their efforts.  I did so by training models that, depending on their decision threshold, can perform well at either precision or recall.
 
-![Out-of-box PR curve](imgs/pr_cuves_zoombed.png)
+![Out-of-box PR curve](imgs/pr_curves_zoomed.png)
 
 Out of the box, models performed better on average using the prejudiced features.  I selected the best performing classifier for each feature set, and when I grid searched over their hyper-parameters , I got these curves.
 
@@ -35,8 +35,8 @@ Out of the box, models performed better on average using the prejudiced features
 
 These models have two possible applications: punishment and assistance.  In the punitive category, imagine you want to put extra restrictions on or deny parole to someone with a high likelihood of violating.  In that case, you would probably want a model with high precision so that you could be more certain that you were punishing the right person.  When providing extra services or therapies, on the other hand, you might want to reach as many likely violators as possible.  In that case, you would prefer recall.  The non-prejudiced model best suits punitive purposes, while the prejudiced model performs better in the assistive realm.
 
-![Feature Importance 1](imgs/partial_dependenc_best_model_prej.png)
-![Feature Importance 2](img/best_model_partial_dependence_no_prej.png)
+![Feature Importance 1](imgs/partial_dependence_best_model_prej.png)
+![Feature Importance 2](imgs/best_model_partial_dependence_no_prej.png)
 
 These were the  features that my models found most important.  The prejudicial model believes that the older someone is and the higher their BMI, the less likely they are to violate.  The non-prejudiced model sees a positive correlation between violating and transience, which may have to do with the fact that transients need to register every month.
 
