@@ -4,6 +4,15 @@ import pandas as pd
 import numpy as np
 
 def tag_counter(lst, tag_values):
+    '''
+    INPUT: lst = list of crime descriptions
+           tag_values = words you're looking for in the descriptions
+    OUTPUT: tot = the amount of times that a word in tag_values appears
+            in the list of descriptions
+
+    Counts the number of times that words in tag_values appear in a list of
+    crime descriptions.
+    '''
     tot = 0
     for val in tag_values:
         for descrip in lst:
@@ -12,6 +21,9 @@ def tag_counter(lst, tag_values):
     return tot
 
 class CustomMixin(TransformerMixin):
+    '''
+    Template class that allows the setting of parameters for subclasses.
+    '''
     def get_params(self, **kwargs):
         return dict()
 
@@ -21,6 +33,9 @@ class CustomMixin(TransformerMixin):
 
 
 class ListSplitter(CustomMixin):
+    '''
+    Pipeline step to turn 'Description' and 'Offense Code' back into lists.
+    '''
     def fit(self, X, y):
         return self
 
@@ -35,6 +50,9 @@ class ListSplitter(CustomMixin):
 
 
 class RaceDummies(CustomMixin):
+    '''
+    Pipeline step that makes dummy columns for race.
+    '''
     def fit(self, X, y):
         return self
 
@@ -46,6 +64,15 @@ class RaceDummies(CustomMixin):
 
 
 class CrimeAndSentence(CustomMixin):
+    '''
+    Pipeline step that creates the Minimum and Maximum Sentence features (the
+    minimum sentence for the crime they committed with the lowest minimum sentence
+    and the mximum sentence for the crime they commited with the highest maximum
+    sentence).
+
+    This step also creates columns that count how many times they committed crimes
+    of particular types.
+    '''
     code_sentencing = {}
     with open('data/code_sentencing.txt') as f:
         for line in f:
@@ -81,6 +108,19 @@ class CrimeAndSentence(CustomMixin):
 
 
 class FeatureEngineer(CustomMixin):
+    '''
+    Pipeline step that creates the rest of the features:
+    'Number of Offenses'
+    'Priors' number of offenses that have the word 'Prior' in their Description
+    'Height in Inches'
+    'BMI' body mass index
+    'Female'
+    'Age'
+    'Years in Violation'
+    'SVP' whether they are a sexually violent predator
+    'Age in Question' age now if they did not violate or age at time they violated
+    'Constant' for training logistic regression
+    '''
     def fit(self, X, y):
         return self
 
@@ -101,6 +141,16 @@ class FeatureEngineer(CustomMixin):
 
 
 class ColumnFilter(CustomMixin):
+    '''
+    Filters out the columns that the model should not train on.
+
+    Parameters:
+                prejudice -
+                            If set to true the data will include prejudicial
+                            features (everything included in exclude2).
+                            If set to false, the data will not include those
+                            features.
+    '''
     exclude1 = [u'Description', u'Offense Code', u'Score', u'Score Date',
                 u'Tool Name', u'Year of Last Conviction', u'Year of Last Release',
                 u'redtext0', u'redtext1', u'redtext2', u'so_id', u'Date of Birth',
@@ -129,6 +179,14 @@ class ColumnFilter(CustomMixin):
 
 
 class PickEstimator(BaseEstimator):
+    '''
+    Estimator that needs another estimator as input, which allows you to
+    gridsearch over various estimators.
+
+    Parameters:
+                estimator -
+                            The estimator you wish to use. Default = AdaBoostClassifier
+    '''
     def __init__(self, estimator=AdaBoostClassifier()):
         self.estimator = estimator
 
